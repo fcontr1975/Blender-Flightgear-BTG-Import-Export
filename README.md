@@ -1,8 +1,15 @@
 # FlightGear BTG Blender Add-on by Federico Contreras
 
+0.0.6 Added the ability to retarget a tile by computing the geospatial location internally in the addon itself and supplying the tile metadata to another tile.
+
+0.0.5 Internal release (I have no idea what I did)
+
 0.0.4 Broke up addon into different files, the single file script it was becoming way too huge.
+
 0.0.3 Added workflow to reliably match vertices from an inner tile (like an airport) and the outer tile. 
-0.0.2 Fixed crash FlightGear diaplying b0rked testires due to large positive UV issue on non-repeating textures
+
+0.0.2 Fixed crash FlightGear displying b0rked textures due to large positive UV issue on non-repeating textures
+
 0.0.1 Initial release
 
 Blender 4.x add-on for importing, editing, and exporting FlightGear TerraGear `.btg` and `.btg.gz` terrain tiles.
