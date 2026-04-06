@@ -1,10 +1,10 @@
 bl_info = {
     "name": "FlightGear BTG Import/Export",
     "author": "Federico Contreras",
-    "version": (0, 0, 6),
+    "version": (0, 0, 7),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
-    "description": "Import and export FlightGear TerraGear BTG scenery files",
+    "description": "Import and export FlightGear TerraGear BTG scenery geometry files",
     "category": "Import-Export",
 }
 
@@ -21,7 +21,7 @@ from xml.sax.saxutils import escape as _xml_escape
 try:
     import bmesh  # type: ignore[import-not-found]
     import bpy  # type: ignore[import-not-found]
-    from mathutils import Vector  # type: ignore[import-not-found]
+    from mathutils import Matrix, Vector  # type: ignore[import-not-found]
     from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty  # type: ignore[import-not-found]
     from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup  # type: ignore[import-not-found]
     from bpy_extras.io_utils import ExportHelper, ImportHelper  # type: ignore[import-not-found]
@@ -29,6 +29,7 @@ except ModuleNotFoundError:
     # Allow parser/export helper functions to be imported for non-Blender tests.
     bmesh = None
     bpy = None
+    Matrix = None
     Vector = None
 
     def BoolProperty(**_kwargs):
@@ -545,6 +546,154 @@ def _set_scene_reference_mesh_name(scene, value):
             scene.fg_btg_reference_mesh_name = str(value or "")
         except AttributeError:
             pass
+
+
+def _mat3_transpose(matrix):
+    return (
+        (matrix[0][0], matrix[1][0], matrix[2][0]),
+        (matrix[0][1], matrix[1][1], matrix[2][1]),
+        (matrix[0][2], matrix[1][2], matrix[2][2]),
+    )
+
+
+def _mat3_mul(left, right):
+    return (
+        (
+            left[0][0] * right[0][0] + left[0][1] * right[1][0] + left[0][2] * right[2][0],
+            left[0][0] * right[0][1] + left[0][1] * right[1][1] + left[0][2] * right[2][1],
+            left[0][0] * right[0][2] + left[0][1] * right[1][2] + left[0][2] * right[2][2],
+        ),
+        (
+            left[1][0] * right[0][0] + left[1][1] * right[1][0] + left[1][2] * right[2][0],
+            left[1][0] * right[0][1] + left[1][1] * right[1][1] + left[1][2] * right[2][1],
+            left[1][0] * right[0][2] + left[1][1] * right[1][2] + left[1][2] * right[2][2],
+        ),
+        (
+            left[2][0] * right[0][0] + left[2][1] * right[1][0] + left[2][2] * right[2][0],
+            left[2][0] * right[0][1] + left[2][1] * right[1][1] + left[2][2] * right[2][1],
+            left[2][0] * right[0][2] + left[2][1] * right[1][2] + left[2][2] * right[2][2],
+        ),
+    )
+
+
+def _mat3_vec_mul(matrix, vector):
+    return (
+        matrix[0][0] * vector[0] + matrix[0][1] * vector[1] + matrix[0][2] * vector[2],
+        matrix[1][0] * vector[0] + matrix[1][1] * vector[1] + matrix[1][2] * vector[2],
+        matrix[2][0] * vector[0] + matrix[2][1] * vector[1] + matrix[2][2] * vector[2],
+    )
+
+
+def _object_btg_frame(obj):
+    center_x = obj.get("fg_btg_center_x")
+    center_y = obj.get("fg_btg_center_y")
+    center_z = obj.get("fg_btg_center_z")
+    if center_x is None or center_y is None or center_z is None:
+        return None
+
+    try:
+        center = (float(center_x), float(center_y), float(center_z))
+        import_scale = float(obj.get("fg_btg_import_scale", IMPORT_SCALE))
+        z_offset = float(obj.get("fg_btg_z_offset", 0.0))
+    except (TypeError, ValueError):
+        return None
+
+    if abs(import_scale) <= 1e-12:
+        import_scale = IMPORT_SCALE
+
+    return {
+        "center": center,
+        "import_scale": import_scale,
+        "z_offset": z_offset,
+        "enu_applied": bool(obj.get("fg_btg_enu_applied")),
+    }
+
+
+def _metadata_alignment_matrix(source_obj, anchor_obj):
+    if Matrix is None:
+        return None, "This operator requires Blender runtime"
+
+    source_frame = _object_btg_frame(source_obj)
+    anchor_frame = _object_btg_frame(anchor_obj)
+    if source_frame is None:
+        return None, f"'{source_obj.name}' is missing fg_btg_center_* metadata."
+    if anchor_frame is None:
+        return None, "Active anchor tile is missing fg_btg_center_* metadata."
+
+    source_center = source_frame["center"]
+    anchor_center = anchor_frame["center"]
+    source_scale = source_frame["import_scale"]
+    anchor_scale = anchor_frame["import_scale"]
+    source_z_offset = source_frame["z_offset"]
+    anchor_z_offset = anchor_frame["z_offset"]
+
+    source_rot = _ecef_to_enu_matrix(*source_center) if source_frame["enu_applied"] else (
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+    anchor_rot = _ecef_to_enu_matrix(*anchor_center) if anchor_frame["enu_applied"] else (
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+
+    source_rot_inv = _mat3_transpose(source_rot)
+    rotation = _mat3_mul(anchor_rot, source_rot_inv)
+    scale_ratio = anchor_scale / source_scale
+    rotation_scaled = tuple(
+        tuple(component * scale_ratio for component in row)
+        for row in rotation
+    )
+
+    center_delta_scene = (
+        (source_center[0] - anchor_center[0]) * anchor_scale,
+        (source_center[1] - anchor_center[1]) * anchor_scale,
+        (source_center[2] - anchor_center[2]) * anchor_scale,
+    )
+
+    center_delta_in_anchor = _mat3_vec_mul(anchor_rot, center_delta_scene)
+    source_z_bias = _mat3_vec_mul(rotation_scaled, (0.0, 0.0, source_z_offset))
+    translation = (
+        center_delta_in_anchor[0] + source_z_bias[0],
+        center_delta_in_anchor[1] + source_z_bias[1],
+        center_delta_in_anchor[2] + source_z_bias[2] - anchor_z_offset,
+    )
+
+    return Matrix((
+        (rotation_scaled[0][0], rotation_scaled[0][1], rotation_scaled[0][2], translation[0]),
+        (rotation_scaled[1][0], rotation_scaled[1][1], rotation_scaled[1][2], translation[1]),
+        (rotation_scaled[2][0], rotation_scaled[2][1], rotation_scaled[2][2], translation[2]),
+        (0.0, 0.0, 0.0, 1.0),
+    )), ""
+
+
+def _is_already_aligned_to_anchor(source_obj, anchor_source):
+    source_anchor = str(source_obj.get("fg_btg_anchor_source", ""))
+    if not anchor_source or not source_anchor:
+        return False
+    return os.path.abspath(source_anchor) == os.path.abspath(anchor_source)
+
+
+def _mark_object_anchor_alignment(source_obj, anchor_obj):
+    anchor_source = str(anchor_obj.get("fg_btg_source", ""))
+    if anchor_source:
+        source_obj["fg_btg_anchor_source"] = os.path.abspath(anchor_source)
+
+    source_obj["fg_btg_exportable_reference"] = True
+    source_obj["fg_btg_anchor_center_x"] = float(anchor_obj.get("fg_btg_center_x", 0.0))
+    source_obj["fg_btg_anchor_center_y"] = float(anchor_obj.get("fg_btg_center_y", 0.0))
+    source_obj["fg_btg_anchor_center_z"] = float(anchor_obj.get("fg_btg_center_z", 0.0))
+
+    for child in getattr(source_obj, "children", []):
+        if child.type != "MESH" or not child.get("fg_btg_is_point_group"):
+            continue
+        if anchor_source:
+            child["fg_btg_anchor_source"] = os.path.abspath(anchor_source)
+        child["fg_btg_exportable_reference"] = True
+        child["fg_btg_anchor_center_x"] = source_obj["fg_btg_anchor_center_x"]
+        child["fg_btg_anchor_center_y"] = source_obj["fg_btg_anchor_center_y"]
+        child["fg_btg_anchor_center_z"] = source_obj["fg_btg_anchor_center_z"]
 
 
 def _btg_center_from_tile_index(tile_index):
@@ -1858,6 +2007,82 @@ class OBJECT_OT_flightgear_retarget_tile(Operator):
         return {"FINISHED"}
 
 
+class OBJECT_OT_flightgear_align_objects_from_metadata(Operator):
+    bl_idname = "object.flightgear_align_objects_from_metadata"
+    bl_label = "Align Objects"
+    bl_description = "Align selected BTG objects to the active tile using fg_btg_* metadata"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        if bpy is None or Matrix is None:
+            self.report({"ERROR"}, "This operator requires Blender runtime")
+            return {"CANCELLED"}
+
+        anchor_obj, error_message = _resolve_anchor_tile_object(context)
+        if anchor_obj is None:
+            self.report({"ERROR"}, error_message)
+            return {"CANCELLED"}
+
+        anchor_source = str(anchor_obj.get("fg_btg_source", ""))
+
+        candidates = []
+        seen = set()
+        for selected in context.selected_objects:
+            source_obj = selected
+            if source_obj.get("fg_btg_is_point_group") and getattr(source_obj, "parent", None) is not None:
+                source_obj = source_obj.parent
+            if source_obj is None or source_obj == anchor_obj:
+                continue
+            if source_obj.type != "MESH":
+                continue
+
+            ptr = source_obj.as_pointer()
+            if ptr in seen:
+                continue
+            seen.add(ptr)
+            candidates.append(source_obj)
+
+        if not candidates:
+            self.report(
+                {"ERROR"},
+                "Select at least two imported BTG mesh objects and keep the anchor tile active.",
+            )
+            return {"CANCELLED"}
+
+        aligned = 0
+        skipped_already_aligned = 0
+        skipped_errors = []
+        for source_obj in candidates:
+            if _is_already_aligned_to_anchor(source_obj, anchor_source):
+                skipped_already_aligned += 1
+                continue
+
+            align_matrix, error = _metadata_alignment_matrix(source_obj, anchor_obj)
+            if align_matrix is None:
+                skipped_errors.append(error)
+                continue
+
+            source_obj.matrix_world = align_matrix
+            _mark_object_anchor_alignment(source_obj, anchor_obj)
+            aligned += 1
+
+        if aligned == 0:
+            details = f" ({skipped_errors[0]})" if skipped_errors else ""
+            self.report(
+                {"WARNING"},
+                "No objects were aligned." + details,
+            )
+            return {"CANCELLED"}
+
+        message = f"Aligned {aligned} object(s) to active tile '{anchor_obj.name}' using fg_btg_* metadata."
+        if skipped_already_aligned:
+            message += f" Skipped {skipped_already_aligned} already aligned object(s)."
+        if skipped_errors:
+            message += f" Skipped {len(skipped_errors)} object(s) missing metadata."
+        self.report({"INFO"}, message)
+        return {"FINISHED"}
+
+
 class OBJECT_OT_flightgear_set_working_mesh_from_active(Operator):
     bl_idname = "object.flightgear_set_working_mesh_from_active"
     bl_label = "Use Active As Working Mesh"
@@ -2566,6 +2791,11 @@ class VIEW3D_PT_flightgear_btg_tools(Panel):
             row = conform_box.row(align=True)
             row.operator(OBJECT_OT_flightgear_set_working_mesh_from_active.bl_idname, text="Set to Working Mesh")
             row.operator(OBJECT_OT_flightgear_set_reference_mesh_from_selection.bl_idname, text="Set to Reference Mesh")
+
+            conform_box.operator(
+                OBJECT_OT_flightgear_align_objects_from_metadata.bl_idname,
+                text="Align Objects",
+            )
 
             conform_op = conform_box.operator(OBJECT_OT_flightgear_conform_seam_vertices.bl_idname, text="Conform Seam Vertices")
             conform_op.working_tile_name = _scene_working_mesh_name(context.scene)

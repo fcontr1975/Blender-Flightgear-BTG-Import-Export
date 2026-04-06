@@ -374,6 +374,10 @@ def make_menu_functions(ns):
             text="Conform Selected Seam Vertices",
         )
         self.layout.operator(
+            ns["OBJECT_OT_flightgear_align_objects_from_metadata"].bl_idname,
+            text="Align Objects",
+        )
+        self.layout.operator(
             ns["OBJECT_OT_flightgear_set_vertices_in_game_altitude"].bl_idname,
             text="Set Vertices at a Specific In-Game Altitude",
         )
@@ -410,6 +414,7 @@ def build_classes(ns):
         ns["OBJECT_OT_flightgear_set_working_mesh_from_active"],
         ns["OBJECT_OT_flightgear_set_reference_mesh_from_selection"],
         ns["OBJECT_OT_flightgear_conform_seam_vertices"],
+        ns["OBJECT_OT_flightgear_align_objects_from_metadata"],
         ns["OBJECT_OT_flightgear_set_vertices_in_game_altitude"],
         ns["OBJECT_OT_flightgear_cache_fg_material_library"],
         ns["OBJECT_OT_flightgear_add_fg_material_from_library"],

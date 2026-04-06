@@ -42,6 +42,7 @@ The command writes a versioned ZIP file into `releases/`.
 - Optionally flip DDS V coordinates on import and reverse that flip on export.
 - Load the 8 adjacent FlightGear buckets around the active tile for seam alignment.
 - Generate exportable ocean placeholder neighbors when adjacent ocean BTGs are missing.
+- Align selected BTG meshes to the active tile using `fg_btg_*` metadata.
 - Manage adjacent reference tile display from the 3D View sidebar:
   - textured or wire display
   - in-front drawing
@@ -95,6 +96,7 @@ Sections:
 
 - `Material Library`: cache all FlightGear materials, add one by search, refresh, or clear cached materials.
 - `Active Tile`: shows the selected imported BTG tile and adjacent-tile state.
+- `Tile Pair Conform`: pick working/reference meshes, align selected meshes to the active tile from metadata, and run seam-vertex tools.
 - `Display Helpers`: toggle adjacent tiles between wire and textured display, enable in-front drawing, lock selection, or apply the seam-edit preset.
 
 ### Material Properties
