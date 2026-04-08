@@ -1,5 +1,7 @@
 # FlightGear BTG Blender Add-on by Federico Contreras
 
+0.0.7 Added button in "Tile Pair Conform" to align objects to one another, this makes it much easier to align an airport to it's home tile when the home tile does not have a hole cut out of it yet.
+
 0.0.6 Added the ability to retarget a tile by computing the geospatial location internally in the addon itself and supplying the tile metadata to another tile.
 
 0.0.5 Internal release (I have no idea what I did)
