@@ -57,7 +57,7 @@ The command writes a versioned ZIP file into `releases/`.
 - Sync user-authored materials into `materials.xml` and copy their referenced textures into `FG_ROOT/Textures/<subfolder>`.
 - Preserve imported native FlightGear materials while skipping unnecessary managed `materials.xml` rewrites.
 - Detect custom texture overrides on imported FlightGear materials and export them as user-managed materials.
-- Export BTG point-light groups using the expected FlightGear naming convention.
+- Export BTG point-light groups using imported metadata or companion mesh names such as `4970957_lights`, `RPLK_lights_blue`, and `RPLK_lights_white_seq`.
 - Author explicit FlightGear material properties from Blender's Material tab.
 
 ## Blender UI Overview
@@ -81,6 +81,7 @@ Available from `File > Export > FlightGear Terrain (.btg/.btg.gz)`.
 Key options:
 
 - `Selected Objects Only`: exports only the current mesh selection.
+- Mesh companions named `<tile-or-object>_lights` or `<tile-or-object>_lights_*` are treated as BTG point lights when they contain vertices/edges and no faces.
 - `Flip DDS V For Blender View`: reverses the Blender viewport DDS flip so FlightGear UVs remain correct.
 - `Write Associated .stg`: creates or updates the sibling `.stg` with `OBJECT_BASE`.
 - `Export Scenery Package Layout`: copies the exported tile into `Terrain/<10deg>/<1deg>/` under a chosen scenery package root.

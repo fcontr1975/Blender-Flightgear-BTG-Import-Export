@@ -7,6 +7,7 @@ try:
         _bucket_from_index,
         _ecef_to_enu_matrix,
         _normalize3,
+        _point_group_owner_label_from_name,
         _point_group_tile_index_from_name,
         _rotate3_inv,
         _tile_index_from_path,
@@ -23,6 +24,7 @@ except ImportError:
         _bucket_from_index,
         _ecef_to_enu_matrix,
         _normalize3,
+        _point_group_owner_label_from_name,
         _point_group_tile_index_from_name,
         _rotate3_inv,
         _tile_index_from_path,
@@ -41,7 +43,17 @@ EXPORT_SCALE = 100.0
 def _is_point_group_object(obj):
     if bool(obj.get("fg_btg_is_point_group")):
         return True
-    return _point_group_tile_index_from_name(getattr(obj, "name", "")) is not None
+
+    owner_label = _point_group_owner_label_from_name(getattr(obj, "name", ""))
+    if owner_label is None or getattr(obj, "type", None) != "MESH":
+        return False
+
+    mesh = getattr(obj, "data", None)
+    polygons = getattr(mesh, "polygons", None)
+    if polygons is not None and len(polygons) > 0:
+        return False
+
+    return True
 
 
 def _point_group_vertex_count(point_groups):
@@ -88,23 +100,27 @@ def _extract_export_mesh_data(
                 objects.append(child)
                 pending.append(child)
 
-        selected_tile_ids = set()
+        selected_point_group_labels = set()
         for obj in objects:
             if obj.type != "MESH":
                 continue
+            if not _is_point_group_object(obj):
+                selected_point_group_labels.add(obj.name)
             source_path = obj.get("fg_btg_source")
             if isinstance(source_path, str) and source_path:
-                selected_tile_ids.add(_btg_output_basename(source_path))
+                selected_point_group_labels.add(_btg_output_basename(source_path))
 
-        if selected_tile_ids:
+        if selected_point_group_labels:
             for scene_obj in context.scene.objects:
                 if scene_obj.type != "MESH":
                     continue
                 ptr = scene_obj.as_pointer()
                 if ptr in seen_ptrs:
                     continue
-                point_tile_id = _point_group_tile_index_from_name(scene_obj.name)
-                if point_tile_id and point_tile_id in selected_tile_ids:
+                if not _is_point_group_object(scene_obj):
+                    continue
+                point_owner_label = _point_group_owner_label_from_name(scene_obj.name)
+                if point_owner_label and point_owner_label in selected_point_group_labels:
                     seen_ptrs.add(ptr)
                     objects.append(scene_obj)
     else:
@@ -115,6 +131,8 @@ def _extract_export_mesh_data(
     source_frame_map = {}
     for scene_obj in context.scene.objects:
         if scene_obj.type != "MESH":
+            continue
+        if _is_point_group_object(scene_obj):
             continue
         if scene_obj.get("fg_btg_is_adjacent_reference"):
             continue
@@ -128,13 +146,15 @@ def _extract_export_mesh_data(
             float(scene_obj.get("fg_btg_center_z", 0.0)),
         )
         tile_id = _btg_output_basename(source_path)
-        if tile_id not in source_frame_map:
-            source_frame_map[tile_id] = {
-                "center": source_center_map[key],
-                "import_scale": float(scene_obj.get("fg_btg_import_scale", IMPORT_SCALE)),
-                "enu_applied": bool(scene_obj.get("fg_btg_enu_applied")),
-                "z_offset": float(scene_obj.get("fg_btg_z_offset", 0.0)),
-            }
+        frame_record = {
+            "center": source_center_map[key],
+            "import_scale": float(scene_obj.get("fg_btg_import_scale", IMPORT_SCALE)),
+            "enu_applied": bool(scene_obj.get("fg_btg_enu_applied")),
+            "z_offset": float(scene_obj.get("fg_btg_z_offset", 0.0)),
+            "owner_object": scene_obj,
+        }
+        source_frame_map.setdefault(tile_id, frame_record)
+        source_frame_map.setdefault(scene_obj.name, frame_record)
 
     vertices = []
     normals = []
@@ -160,15 +180,20 @@ def _extract_export_mesh_data(
         obj_z_offset = float(obj.get("fg_btg_z_offset", 0.0))
         obj_enu_applied = bool(obj.get("fg_btg_enu_applied"))
         is_point_group = _is_point_group_object(obj)
+        point_frame_owner = None
 
         if is_point_group and not obj_enu_applied:
-            point_tile_id = _point_group_tile_index_from_name(getattr(obj, "name", ""))
-            inherited_frame = source_frame_map.get(point_tile_id)
+            point_owner_label = _point_group_owner_label_from_name(getattr(obj, "name", ""))
+            inherited_frame = source_frame_map.get(point_owner_label)
+            if inherited_frame is None:
+                point_tile_id = _point_group_tile_index_from_name(getattr(obj, "name", ""))
+                inherited_frame = source_frame_map.get(point_tile_id)
             if inherited_frame is not None:
                 obj_center = inherited_frame["center"]
                 obj_import_scale = inherited_frame["import_scale"]
                 obj_enu_applied = inherited_frame["enu_applied"]
                 obj_z_offset = inherited_frame["z_offset"]
+                point_frame_owner = inherited_frame.get("owner_object")
 
         if apply_enu_inverse and obj_enu_applied:
             if is_exportable_reference:
@@ -214,9 +239,25 @@ def _extract_export_mesh_data(
             and apply_enu_inverse
             and not is_exportable_reference
         )
+        use_owner_local_frame = bool(
+            is_point_group
+            and point_frame_owner is not None
+            and preserve_btg_local_frame
+            and apply_enu_inverse
+            and point_frame_owner.get("fg_btg_enu_applied")
+            and not point_frame_owner.get("fg_btg_exportable_reference")
+        )
+        owner_local_matrix_inv = (
+            point_frame_owner.matrix_world.inverted_safe()
+            if use_owner_local_frame
+            else None
+        )
 
         for v in mesh.vertices:
-            if use_btg_local_frame:
+            if owner_local_matrix_inv is not None:
+                owner_local = owner_local_matrix_inv @ (obj.matrix_world @ v.co)
+                x, y, z = owner_local.x, owner_local.y, owner_local.z
+            elif use_btg_local_frame:
                 x, y, z = v.co.x, v.co.y, v.co.z
             else:
                 world = obj.matrix_world @ v.co

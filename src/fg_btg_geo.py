@@ -148,12 +148,19 @@ def _tile_index_from_path(path_value):
     return int(stem)
 
 
-def _point_group_tile_index_from_name(name):
+def _point_group_owner_label_from_name(name):
     if not isinstance(name, str):
         return None
-    match = re.match(r"^(\d+)_lights(?:_.+)?$", name)
+    match = re.match(r"^(.+)_lights(?:_.+)?$", name)
     if match:
         return match.group(1)
+    return None
+
+
+def _point_group_tile_index_from_name(name):
+    owner_label = _point_group_owner_label_from_name(name)
+    if owner_label and owner_label.isdigit():
+        return owner_label
     return None
 
 
